@@ -3,41 +3,25 @@ port module App exposing (..)
 import Html exposing (Html, div, text, ul, li, input, label, button, Attribute, section, footer, p, header, h1, span, strong, a)
 import Html.Attributes as HA
 import Html.Events as HE
-import Json.Decode as JD exposing ((:=), andThen)
+import Json.Decode as JD
 import Dom
 import Task
 import Navigation
-import String
-import UrlParser exposing (Parser, (</>), format, oneOf, int, s, string)
 import Json.Encode as JE
+import TodoTypes as TT
+import Encoders
+import Decoders
+import Router
+import Utils
+import Ports
 
 
-type alias Todo =
-    { id : Int
-    , title : String
-    , completed : Bool
-    , isEditing : Bool
-    }
-
-
-
--- Model
-
-
-type alias Model =
-    { todos : List Todo
-    , field : String
-    , uid : Int
-    , visibility : Visibility
-    }
-
-
-emptyModel : Model
+emptyModel : TT.Model
 emptyModel =
     { todos = []
     , field = ""
     , uid = 0
-    , visibility = All
+    , visibility = TT.All
     }
 
 
@@ -45,13 +29,13 @@ emptyModel =
 -- init
 
 
-init : Maybe JE.Value -> Result String Visibility -> ( Model, Cmd Msg )
+init : Maybe JE.Value -> Result String TT.Visibility -> ( TT.Model, Cmd TT.Msg )
 init initialModel result =
     case initialModel of
         Just model ->
             let
                 decodedModel =
-                    case (JD.decodeValue modelDecoder model) of
+                    case (JD.decodeValue Decoders.modelDecoder model) of
                         Err _ ->
                             emptyModel
 
@@ -65,129 +49,10 @@ init initialModel result =
 
 
 
--- Decoders
-
-
-modelDecoder : JD.Decoder Model
-modelDecoder =
-    JD.object4 Model
-        ("todos" := JD.list taskDecoder)
-        ("field" := JD.string)
-        ("uid" := JD.int)
-        ("visibility" := JD.string `andThen` visibilityDecoder)
-
-
-taskDecoder : JD.Decoder Todo
-taskDecoder =
-    JD.object4 Todo
-        ("id" := JD.int)
-        ("title" := JD.string)
-        ("completed" := JD.bool)
-        ("isEditing" := JD.bool)
-
-
-visibilityDecoder : String -> JD.Decoder Visibility
-visibilityDecoder str =
-    case str of
-        "All" ->
-            JD.succeed All
-
-        "Active" ->
-            JD.succeed Active
-
-        "Completed" ->
-            JD.succeed Completed
-
-        _ ->
-            JD.succeed All
-
-
-
--- Encoders
-
-
-convertToJson : Model -> JE.Value
-convertToJson model =
-    JE.object
-        [ ( "todos", JE.list (List.map todoToValue model.todos) )
-        , ( "field", JE.string model.field )
-        , ( "uid", JE.int model.uid )
-        , ( "visibility", JE.string (toString model.visibility) )
-        ]
-
-
-todoToValue : Todo -> JE.Value
-todoToValue todo =
-    JE.object
-        [ ( "id", JE.int todo.id )
-        , ( "title", JE.string todo.title )
-        , ( "completed", JE.bool todo.completed )
-        , ( "isEditing", JE.bool todo.isEditing )
-        ]
-
-
-
--- Union Types
-
-
-type Visibility
-    = All
-    | Active
-    | Completed
-
-
-type alias TodoViewConfig =
-    { todoEditMessage : Todo -> Bool -> Msg
-    , todoUpdateMessage : Todo -> String -> Msg
-    }
-
-
-
--- Message
-
-
-type Msg
-    = Delete Int
-    | Toggle Todo
-    | Edit Todo Bool
-    | UpdateEntry Todo String
-    | Add
-    | UpdateField String
-    | NoOp
-    | ClearCompleted
-    | ChangeVisibility Visibility
-
-
-
--- Ports
-
-
-port persist : JE.Value -> Cmd msg
-
-
-
--- Router
-
-
-hashParser : Navigation.Location -> Result String Visibility
-hashParser location =
-    UrlParser.parse identity pageParser (String.dropLeft 2 location.hash)
-
-
-pageParser : Parser (Visibility -> a) a
-pageParser =
-    oneOf
-        [ format All (s "all")
-        , format Completed (s "completed")
-        , format Active (s "active")
-        ]
-
-
-
 -- Update
 
 
-urlUpdate : Result String Visibility -> Model -> ( Model, Cmd Msg )
+urlUpdate : Result String TT.Visibility -> TT.Model -> ( TT.Model, Cmd TT.Msg )
 urlUpdate result model =
     case result of
         Err _ ->
@@ -197,35 +62,35 @@ urlUpdate result model =
             { model | visibility = visibility } ! []
 
 
-updateWithStorage : Msg -> Model -> ( Model, Cmd Msg )
+updateWithStorage : TT.Msg -> TT.Model -> ( TT.Model, Cmd TT.Msg )
 updateWithStorage msg model =
     let
         ( newModel, cmds ) =
             update msg model
     in
-        ( newModel, Cmd.batch ([ persist (convertToJson newModel), cmds ]) )
+        ( newModel, Cmd.batch ([ Ports.persist (Encoders.convertToJson newModel), cmds ]) )
 
 
-update : Msg -> Model -> ( Model, Cmd Msg )
+update : TT.Msg -> TT.Model -> ( TT.Model, Cmd TT.Msg )
 update msg model =
     case msg of
-        NoOp ->
+        TT.NoOp ->
             ( model, Cmd.none )
 
-        UpdateField newValue ->
+        TT.UpdateField newValue ->
             ( { model | field = newValue }, Cmd.none )
 
-        Toggle todo ->
+        TT.Toggle todo ->
             let
                 newTodo =
                     { todo | completed = not todo.completed }
 
                 updatedTodos =
-                    updateList newTodo model.todos
+                    Utils.updateList newTodo model.todos
             in
                 { model | todos = updatedTodos } ! []
 
-        ClearCompleted ->
+        TT.ClearCompleted ->
             let
                 incomplete =
                     \todo -> not todo.completed
@@ -235,7 +100,7 @@ update msg model =
             in
                 { model | todos = incompleteTodos } ! []
 
-        Delete id ->
+        TT.Delete id ->
             let
                 todoFilter =
                     \todo ->
@@ -249,31 +114,31 @@ update msg model =
             in
                 ( { model | todos = filteredTodos }, Cmd.none )
 
-        Edit todo isEditing ->
+        TT.Edit todo isEditing ->
             let
                 newTodo =
                     { todo | isEditing = isEditing }
 
                 newTodos =
-                    updateList newTodo model.todos
+                    Utils.updateList newTodo model.todos
 
                 focus =
                     Dom.focus ("todo-" ++ (toString todo.id))
             in
                 { model | todos = newTodos }
-                    ! [ Task.perform (always NoOp) (always NoOp) focus ]
+                    ! [ Task.perform (always TT.NoOp) (always TT.NoOp) focus ]
 
-        UpdateEntry todo newTitle ->
+        TT.UpdateEntry todo newTitle ->
             let
                 newTodo =
                     { todo | title = newTitle }
 
                 newTodos =
-                    updateList newTodo model.todos
+                    Utils.updateList newTodo model.todos
             in
                 ( { model | todos = newTodos }, Cmd.none )
 
-        Add ->
+        TT.Add ->
             let
                 newTodo =
                     { id = model.uid + 1
@@ -287,49 +152,16 @@ update msg model =
             in
                 ( { model | todos = updatedTodos, field = "", uid = model.uid + 1 }, Cmd.none )
 
-        ChangeVisibility visibility ->
+        TT.ChangeVisibility visibility ->
             { model | visibility = visibility }
                 ! []
-
-
-
--- Utils
-
-
-updateList : Todo -> List Todo -> List Todo
-updateList todo todos =
-    List.map (updateListItem todo) todos
-
-
-updateListItem : Todo -> Todo -> Todo
-updateListItem newTodo oldTodo =
-    if newTodo.id == oldTodo.id then
-        newTodo
-    else
-        oldTodo
-
-
-
--- Custom Event
-
-
-onEnter : Msg -> Attribute Msg
-onEnter msg =
-    let
-        tagger code =
-            if code == 13 then
-                msg
-            else
-                NoOp
-    in
-        HE.on "keydown" (JD.map tagger HE.keyCode)
 
 
 
 -- View
 
 
-view : Model -> Html Msg
+view : TT.Model -> Html TT.Msg
 view model =
     section
         [ HA.id "todoapp" ]
@@ -341,8 +173,8 @@ view model =
             , input
                 [ HA.type' "text"
                 , HA.id "new-todo"
-                , onEnter Add
-                , HE.onInput UpdateField
+                , Utils.onEnter TT.Add
+                , HE.onInput TT.UpdateField
                 , HA.type' "text"
                 , HA.value model.field
                 , HA.class "new-todo"
@@ -360,18 +192,18 @@ view model =
         ]
 
 
-todoListView : Visibility -> List Todo -> Html Msg
+todoListView : TT.Visibility -> List TT.Todo -> Html TT.Msg
 todoListView visibility todos =
     let
         filteredTodos =
             case visibility of
-                All ->
+                TT.All ->
                     todos
 
-                Completed ->
+                TT.Completed ->
                     List.filter (\todo -> todo.completed) todos
 
-                Active ->
+                TT.Active ->
                     List.filter (\todo -> not todo.completed) todos
     in
         section [ HA.class "main" ]
@@ -380,7 +212,7 @@ todoListView visibility todos =
             ]
 
 
-viewCount : List todo -> Html Msg
+viewCount : List todo -> Html TT.Msg
 viewCount todos =
     span
         [ HA.id "todo-count" ]
@@ -389,23 +221,23 @@ viewCount todos =
         ]
 
 
-filtersView : Visibility -> Html Msg
+filtersView : TT.Visibility -> Html TT.Msg
 filtersView visibility =
     ul
         [ HA.id "filters" ]
-        [ filter "#/all" All visibility
-        , filter "#/active" Active visibility
-        , filter "#/completed" Completed visibility
+        [ filter "#/all" TT.All visibility
+        , filter "#/active" TT.Active visibility
+        , filter "#/completed" TT.Completed visibility
         ]
 
 
-filter : String -> Visibility -> Visibility -> Html Msg
+filter : String -> TT.Visibility -> TT.Visibility -> Html TT.Msg
 filter uri visibility actualVisibility =
     li
         []
         [ a
             [ HA.href uri
-            , HE.onClick (ChangeVisibility visibility)
+            , HE.onClick (TT.ChangeVisibility visibility)
             , HA.classList
                 [ ( "selected"
                   , (visibility == actualVisibility)
@@ -416,7 +248,7 @@ filter uri visibility actualVisibility =
         ]
 
 
-viewControls : Visibility -> List Todo -> Html Msg
+viewControls : TT.Visibility -> List TT.Todo -> Html TT.Msg
 viewControls visibility todos =
     let
         pendingTodos =
@@ -428,20 +260,20 @@ viewControls visibility todos =
             , filtersView visibility
             , button
                 [ HA.id "clear-completed"
-                , HE.onClick ClearCompleted
+                , HE.onClick TT.ClearCompleted
                 ]
                 [ text "Clear completed (1)" ]
             ]
 
 
-todoViewConfig : TodoViewConfig
+todoViewConfig : TT.TodoViewConfig
 todoViewConfig =
-    { todoEditMessage = Edit
-    , todoUpdateMessage = UpdateEntry
+    { todoEditMessage = TT.Edit
+    , todoUpdateMessage = TT.UpdateEntry
     }
 
 
-todoView : TodoViewConfig -> Todo -> Html Msg
+todoView : TT.TodoViewConfig -> TT.Todo -> Html TT.Msg
 todoView config todo =
     li
         [ HE.onDoubleClick (config.todoEditMessage todo True)
@@ -456,19 +288,19 @@ todoView config todo =
                 [ HA.class "toggle"
                 , HA.type' "checkbox"
                 , HA.checked todo.completed
-                , HE.onClick (Toggle todo)
+                , HE.onClick (TT.Toggle todo)
                 ]
                 []
             , label
                 [ HA.class "view" ]
                 [ text todo.title ]
-            , button [ HA.class "destroy", HE.onClick (Delete todo.id) ] []
+            , button [ HA.class "destroy", HE.onClick (TT.Delete todo.id) ] []
             , todoEditView config todo
             ]
         ]
 
 
-todoEditView : TodoViewConfig -> Todo -> Html Msg
+todoEditView : TT.TodoViewConfig -> TT.Todo -> Html TT.Msg
 todoEditView config todo =
     input
         [ HA.class "edit"
@@ -477,14 +309,14 @@ todoEditView config todo =
         , HA.value todo.title
         , HE.onBlur (config.todoEditMessage todo False)
         , HE.onInput (config.todoUpdateMessage todo)
-        , onEnter (config.todoEditMessage todo False)
+        , Utils.onEnter (config.todoEditMessage todo False)
         ]
         []
 
 
 main : Program (Maybe JE.Value)
 main =
-    Navigation.programWithFlags (Navigation.makeParser hashParser)
+    Navigation.programWithFlags (Navigation.makeParser Router.hashParser)
         { init = init
         , view = view
         , update = updateWithStorage
