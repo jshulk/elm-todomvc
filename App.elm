@@ -1,22 +1,15 @@
-module App exposing (..)
+port module App exposing (..)
 
 import Html exposing (Html, div, text, ul, li, input, label, button, Attribute, section, footer, p, header, h1, span, strong, a)
 import Html.Attributes as HA
 import Html.Events as HE
-import Json.Decode as Json
+import Json.Decode as JD exposing ((:=), andThen)
 import Dom
 import Task
 import Navigation
 import String
 import UrlParser exposing (Parser, (</>), format, oneOf, int, s, string)
-
-
--- TODO
-{-
-   1. Store the todos to local storage
-   2. Fetch the initial state from local storage
-   3. Implement router
--}
+import Json.Encode as JE
 
 
 type alias Todo =
@@ -43,15 +36,64 @@ type alias Model =
 -- init
 
 
-init : Result String Visibility -> ( Model, Cmd Msg )
-init result =
-    urlUpdate result { todos = todosData, field = "", uid = 2, visibility = All }
+init : Maybe JE.Value -> Result String Visibility -> ( Model, Cmd Msg )
+init initialModel result =
+    case initialModel of
+        Just model ->
+            let
+                decodedModel =
+                    case (JD.decodeValue modelDecoder model) of
+                        Err _ ->
+                            emptyModel
+
+                        Ok model ->
+                            model
+            in
+                urlUpdate result decodedModel
+
+        Nothing ->
+            urlUpdate result emptyModel
 
 
-todosData =
-    [ { id = 1, title = "Something", completed = False, isEditing = False }
-    , { id = 2, title = "Something else", completed = False, isEditing = False }
-    ]
+modelDecoder : JD.Decoder Model
+modelDecoder =
+    JD.object4 Model
+        ("todos" := JD.list taskDecoder)
+        ("field" := JD.string)
+        ("uid" := JD.int)
+        ("visibility" := JD.string `andThen` visibilityDecoder)
+
+
+taskDecoder : JD.Decoder Todo
+taskDecoder =
+    JD.object4 Todo
+        ("id" := JD.int)
+        ("title" := JD.string)
+        ("completed" := JD.bool)
+        ("isEditing" := JD.bool)
+
+
+visibilityDecoder str =
+    case str of
+        "All" ->
+            JD.succeed All
+
+        "Active" ->
+            JD.succeed Active
+
+        "Completed" ->
+            JD.succeed Completed
+
+        _ ->
+            JD.succeed All
+
+
+emptyModel =
+    { todos = []
+    , field = ""
+    , uid = 0
+    , visibility = All
+    }
 
 
 type Visibility
@@ -76,6 +118,9 @@ type Msg
     | ChangeVisibility Visibility
 
 
+port persist : JE.Value -> Cmd msg
+
+
 hashParser : Navigation.Location -> Result String Visibility
 hashParser location =
     UrlParser.parse identity pageParser (String.dropLeft 2 location.hash)
@@ -92,12 +137,41 @@ pageParser =
 
 urlUpdate : Result String Visibility -> Model -> ( Model, Cmd Msg )
 urlUpdate result model =
-    case Debug.log "result" result of
+    case result of
         Err _ ->
             ( model, Navigation.modifyUrl "#/all" )
 
         Ok visibility ->
             { model | visibility = visibility } ! []
+
+
+updateWithStorage : Msg -> Model -> ( Model, Cmd Msg )
+updateWithStorage msg model =
+    let
+        ( newModel, cmds ) =
+            update msg model
+    in
+        ( newModel, Cmd.batch ([ persist (convertToJson newModel), cmds ]) )
+
+
+convertToJson : Model -> JE.Value
+convertToJson model =
+    JE.object
+        [ ( "todos", JE.list (List.map todoToValue model.todos) )
+        , ( "field", JE.string model.field )
+        , ( "uid", JE.int model.uid )
+        , ( "visibility", JE.string (toString model.visibility) )
+        ]
+
+
+todoToValue : Todo -> JE.Value
+todoToValue todo =
+    JE.object
+        [ ( "id", JE.int todo.id )
+        , ( "title", JE.string todo.title )
+        , ( "completed", JE.bool todo.completed )
+        , ( "isEditing", JE.bool todo.isEditing )
+        ]
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -208,7 +282,7 @@ onEnter msg =
             else
                 NoOp
     in
-        HE.on "keydown" (Json.map tagger HE.keyCode)
+        HE.on "keydown" (JD.map tagger HE.keyCode)
 
 
 view : Model -> Html Msg
@@ -370,12 +444,12 @@ todoEditView config todo =
         []
 
 
-main : Program Never
+main : Program (Maybe JE.Value)
 main =
-    Navigation.program (Navigation.makeParser hashParser)
+    Navigation.programWithFlags (Navigation.makeParser hashParser)
         { init = init
         , view = view
-        , update = update
+        , update = updateWithStorage
         , urlUpdate = urlUpdate
         , subscriptions = \_ -> Sub.none
         }

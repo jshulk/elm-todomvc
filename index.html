@@ -8,7 +8,12 @@
     </body>
     <script src="_compile/App.elm"></script>
     <script>
-        
-        runElmProgram();
+        var storedState = localStorage.getItem("elm-todo-save"),
+            startingState = storedState ? JSON.parse(storedState) : null;
+
+        var todo = Elm.App.fullscreen(startingState);
+        todo.ports.persist.subscribe(function(state){
+            localStorage.setItem("elm-todo-save", JSON.stringify(state));
+        });
     </script>
 </html>
