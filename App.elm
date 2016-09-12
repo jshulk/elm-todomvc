@@ -32,6 +32,15 @@ type alias Model =
     }
 
 
+emptyModel : Model
+emptyModel =
+    { todos = []
+    , field = ""
+    , uid = 0
+    , visibility = All
+    }
+
+
 
 -- init
 
@@ -55,6 +64,10 @@ init initialModel result =
             urlUpdate result emptyModel
 
 
+
+-- Decoders
+
+
 modelDecoder : JD.Decoder Model
 modelDecoder =
     JD.object4 Model
@@ -73,6 +86,7 @@ taskDecoder =
         ("isEditing" := JD.bool)
 
 
+visibilityDecoder : String -> JD.Decoder Visibility
 visibilityDecoder str =
     case str of
         "All" ->
@@ -88,70 +102,8 @@ visibilityDecoder str =
             JD.succeed All
 
 
-emptyModel =
-    { todos = []
-    , field = ""
-    , uid = 0
-    , visibility = All
-    }
 
-
-type Visibility
-    = All
-    | Active
-    | Completed
-
-
-
--- Message
-
-
-type Msg
-    = Delete Int
-    | Toggle Todo
-    | Edit Todo Bool
-    | UpdateEntry Todo String
-    | Add
-    | UpdateField String
-    | NoOp
-    | ClearCompleted
-    | ChangeVisibility Visibility
-
-
-port persist : JE.Value -> Cmd msg
-
-
-hashParser : Navigation.Location -> Result String Visibility
-hashParser location =
-    UrlParser.parse identity pageParser (String.dropLeft 2 location.hash)
-
-
-pageParser : Parser (Visibility -> a) a
-pageParser =
-    oneOf
-        [ format All (s "all")
-        , format Completed (s "completed")
-        , format Active (s "active")
-        ]
-
-
-urlUpdate : Result String Visibility -> Model -> ( Model, Cmd Msg )
-urlUpdate result model =
-    case result of
-        Err _ ->
-            ( model, Navigation.modifyUrl "#/all" )
-
-        Ok visibility ->
-            { model | visibility = visibility } ! []
-
-
-updateWithStorage : Msg -> Model -> ( Model, Cmd Msg )
-updateWithStorage msg model =
-    let
-        ( newModel, cmds ) =
-            update msg model
-    in
-        ( newModel, Cmd.batch ([ persist (convertToJson newModel), cmds ]) )
+-- Encoders
 
 
 convertToJson : Model -> JE.Value
@@ -172,6 +124,86 @@ todoToValue todo =
         , ( "completed", JE.bool todo.completed )
         , ( "isEditing", JE.bool todo.isEditing )
         ]
+
+
+
+-- Union Types
+
+
+type Visibility
+    = All
+    | Active
+    | Completed
+
+
+type alias TodoViewConfig =
+    { todoEditMessage : Todo -> Bool -> Msg
+    , todoUpdateMessage : Todo -> String -> Msg
+    }
+
+
+
+-- Message
+
+
+type Msg
+    = Delete Int
+    | Toggle Todo
+    | Edit Todo Bool
+    | UpdateEntry Todo String
+    | Add
+    | UpdateField String
+    | NoOp
+    | ClearCompleted
+    | ChangeVisibility Visibility
+
+
+
+-- Ports
+
+
+port persist : JE.Value -> Cmd msg
+
+
+
+-- Router
+
+
+hashParser : Navigation.Location -> Result String Visibility
+hashParser location =
+    UrlParser.parse identity pageParser (String.dropLeft 2 location.hash)
+
+
+pageParser : Parser (Visibility -> a) a
+pageParser =
+    oneOf
+        [ format All (s "all")
+        , format Completed (s "completed")
+        , format Active (s "active")
+        ]
+
+
+
+-- Update
+
+
+urlUpdate : Result String Visibility -> Model -> ( Model, Cmd Msg )
+urlUpdate result model =
+    case result of
+        Err _ ->
+            ( model, Navigation.modifyUrl "#/all" )
+
+        Ok visibility ->
+            { model | visibility = visibility } ! []
+
+
+updateWithStorage : Msg -> Model -> ( Model, Cmd Msg )
+updateWithStorage msg model =
+    let
+        ( newModel, cmds ) =
+            update msg model
+    in
+        ( newModel, Cmd.batch ([ persist (convertToJson newModel), cmds ]) )
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -260,6 +292,10 @@ update msg model =
                 ! []
 
 
+
+-- Utils
+
+
 updateList : Todo -> List Todo -> List Todo
 updateList todo todos =
     List.map (updateListItem todo) todos
@@ -273,6 +309,10 @@ updateListItem newTodo oldTodo =
         oldTodo
 
 
+
+-- Custom Event
+
+
 onEnter : Msg -> Attribute Msg
 onEnter msg =
     let
@@ -283,6 +323,10 @@ onEnter msg =
                 NoOp
     in
         HE.on "keydown" (JD.map tagger HE.keyCode)
+
+
+
+-- View
 
 
 view : Model -> Html Msg
@@ -388,12 +432,6 @@ viewControls visibility todos =
                 ]
                 [ text "Clear completed (1)" ]
             ]
-
-
-type alias TodoViewConfig =
-    { todoEditMessage : Todo -> Bool -> Msg
-    , todoUpdateMessage : Todo -> String -> Msg
-    }
 
 
 todoViewConfig : TodoViewConfig
