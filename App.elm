@@ -1,8 +1,9 @@
-port module App exposing (..)
+module App exposing (..)
 
 import Html exposing (Html, div, text, ul, li, input, label, button, Attribute, section, footer, p, header, h1, span, strong, a)
 import Html.Attributes as HA
 import Html.Events as HE
+import Html.Keyed as HK
 import Json.Decode as JD
 import Dom
 import Task
@@ -207,9 +208,45 @@ todoListView visibility todos =
                     List.filter (\todo -> not todo.completed) todos
     in
         section [ HA.class "main" ]
-            [ ul [ HA.id "todo-list" ]
+            [ HK.ul [ HA.id "todo-list" ]
                 (List.map (todoView todoViewConfig) filteredTodos)
             ]
+
+
+todoViewConfig : TT.TodoViewConfig
+todoViewConfig =
+    { todoEditMessage = TT.Edit
+    , todoUpdateMessage = TT.UpdateEntry
+    }
+
+
+todoView : TT.TodoViewConfig -> TT.Todo -> ( String, Html TT.Msg )
+todoView config todo =
+    ( "key" ++ toString todo.id
+    , li
+        [ HE.onDoubleClick (config.todoEditMessage todo True)
+        , HA.id (toString todo.id)
+        , HA.classList
+            [ ( "editing", todo.isEditing )
+            , ( "completed", todo.completed )
+            ]
+        ]
+        [ div []
+            [ input
+                [ HA.class "toggle"
+                , HA.type' "checkbox"
+                , HA.checked todo.completed
+                , HE.onClick (TT.Toggle todo)
+                ]
+                []
+            , label
+                [ HA.class "view" ]
+                [ text todo.title ]
+            , button [ HA.class "destroy", HE.onClick (TT.Delete todo.id) ] []
+            , todoEditView config todo
+            ]
+        ]
+    )
 
 
 viewCount : List todo -> Html TT.Msg
@@ -264,40 +301,6 @@ viewControls visibility todos =
                 ]
                 [ text "Clear completed (1)" ]
             ]
-
-
-todoViewConfig : TT.TodoViewConfig
-todoViewConfig =
-    { todoEditMessage = TT.Edit
-    , todoUpdateMessage = TT.UpdateEntry
-    }
-
-
-todoView : TT.TodoViewConfig -> TT.Todo -> Html TT.Msg
-todoView config todo =
-    li
-        [ HE.onDoubleClick (config.todoEditMessage todo True)
-        , HA.id (toString todo.id)
-        , HA.classList
-            [ ( "editing", todo.isEditing )
-            , ( "completed", todo.completed )
-            ]
-        ]
-        [ div []
-            [ input
-                [ HA.class "toggle"
-                , HA.type' "checkbox"
-                , HA.checked todo.completed
-                , HE.onClick (TT.Toggle todo)
-                ]
-                []
-            , label
-                [ HA.class "view" ]
-                [ text todo.title ]
-            , button [ HA.class "destroy", HE.onClick (TT.Delete todo.id) ] []
-            , todoEditView config todo
-            ]
-        ]
 
 
 todoEditView : TT.TodoViewConfig -> TT.Todo -> Html TT.Msg
